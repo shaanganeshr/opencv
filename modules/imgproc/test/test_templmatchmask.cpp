@@ -328,4 +328,74 @@ std::vector<ConstantTemplateParams> ctparams = {
 
 INSTANTIATE_TEST_CASE_P(/**/, ConstantTemplateWithMask, testing::ValuesIn(ctparams));
 
+TEST(Imgproc_MatchTemplate, mask_ccoeff_normed_uniform_region_no_nan)
+{
+    const int intensities[] = { 0, 128, 200, 255 };
+    const int channels_list[] = { 1, 3 };
+
+    for (int ch : channels_list)
+    {
+        Mat templ(16, 16, CV_MAKETYPE(CV_8U, ch), Scalar::all(20));
+        templ(Rect(4, 4, 8, 8)).setTo(Scalar::all(220));
+
+        Mat mask_u8(16, 16, CV_8UC1, Scalar::all(0));
+        mask_u8(Rect(2, 2, 12, 12)).setTo(Scalar::all(255));
+
+        Mat mask_f32;
+        mask_u8.convertTo(mask_f32, CV_32F, 1.0 / 255.0);
+
+        for (int val : intensities)
+        {
+            Mat img(48, 48, CV_MAKETYPE(CV_8U, ch), Scalar::all(val));
+            templ.copyTo(img(Rect(32, 32, 16, 16)));
+
+            for (int m = 0; m < 2; ++m)
+            {
+                const Mat& mask = (m == 0) ? mask_u8 : mask_f32;
+                Mat result;
+                matchTemplate(img, templ, result, TM_CCOEFF_NORMED, mask);
+
+                ASSERT_EQ(CV_32FC1, result.type());
+                EXPECT_TRUE(cv::checkRange(result, true, NULL, -1.0, 1.0 + 1e-5))
+                    << "NaN/Inf or out-of-range value for ch=" << ch << ", intensity=" << val;
+
+                // Uniform background window (Zero variance)
+                EXPECT_NEAR(0.0f, result.at<float>(0, 0), 1e-5f);
+                // Exact template match window (1.0f)
+                EXPECT_NEAR(1.0f, result.at<float>(32, 32), 1e-4f);
+            }
+        }
+    }
+}
+
+TEST(Imgproc_MatchTemplate, mask_coeff_normed_bright_low_contrast){
+    Mat templ(16, 16, CV_8UC1);
+    Mat img(24, 24, CV_8UC1);
+    for (int r = 0; r < img.rows; ++r)
+    {
+        for (int c = 0; c < img.cols; ++c)
+        {
+            uchar val = static_cast<uchar>(((r + c) % 2 == 0) ? 200 : 201);
+            img.at<uchar>(r, c) = val;
+            if (r < templ.rows && c < templ.cols)
+                templ.at<uchar>(r, c) = val;
+        }
+    }
+
+    Mat mask_u8(16, 16, CV_8UC1, Scalar::all(255));
+    Mat mask_f32(16, 16, CV_32F, Scalar::all(1.0f));
+
+    for (int m = 0; m < 2; m++)
+    {
+        const Mat& mask = (m == 0) ? mask_u8 : mask_f32;
+        Mat result;
+        matchTemplate(img, templ, result, TM_CCOEFF_NORMED, mask);
+
+        EXPECT_TRUE(cv::checkRange(result, true, NULL, -1.0 - 1e-5, 1.0 + 1e-5));
+        // Mask aligned (1.0f)
+        EXPECT_NEAR(1.0f, result.at<float>(0, 0), 1e-4f);
+        // Mask misaligned (-1.0f)
+        EXPECT_NEAR(-1.0f, result.at<float>(0, 1), 1e-4f);
+    }
+}
 }} // namespace
